@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Offline Classroom QR · Attendance & Marks</title>
+  <!-- Tailwind for styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"></script>
+  <style>
+    .scanner-video { width: 100%; max-height: 70vh; border-radius: 1rem; }
+    .active-tab { @apply border-b-2 border-blue-600 text-blue-600 font-medium; }
+  </style>
+  <link rel="manifest" href="data:application/manifest+json,{name:'Classroom QR',short_name:'QRClass',icons:[{src:'data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'%3E%3Crect width=\'100\' height=\'100\' fill=\'%232563eb\'/%3E%3Ctext x=\'50\' y=\'70\' font-size=\'50\' text-anchor=\'middle\' fill=\'white\'%3E📋%3C/text%3E%3C/svg%3E',sizes:'512x512',type:'image/svg+xml'}],start_url:'.',display:'standalone',theme_color:'#2563eb',background_color:'#ffffff'}" />
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+<!-- Service Worker for offline caching -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register("data:application/javascript," + encodeURIComponent(`
+      const CACHE = 'qrclass-v1';
+      const urlsToCache = [
+        '.',
+        'https://cdn.tailwindcss.com/',
+        'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
+        'https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js',
+        'https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js'
+      ];
+      self.addEventListener('install', event => {
+        event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(urlsToCache)));
+      });
+      self.addEventListener('fetch', event => {
+        event.respondWith(
+          caches.match(event.request).then(response => response || fetch(event.request))
+        );
+      });
+    `));
+  });
+}
+</script>
+
+<div class="max-w-4xl mx-auto p-4">
+  <h1 class="text-2xl font-bold text-center mb-2">🏫 Rural Classroom QR</h1>
+  <p class="text-center text-sm text-gray-500 mb-4">Works offline · Attendance & Marks</p>
+
+  <!-- Tab Navigation -->
+  <div class="flex flex-wrap border-b mb-4">
+    <button data-tab="students" class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-blue-600 active-tab">👥 Students</button>
+    <button data-tab="qrgen" class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-blue-600">🖨️ Print QR</button>
+    <button data-tab="attendance" class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-blue-600">📸 Scan Attendance</button>
+    <button data-tab="marks" class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-blue-600">📝 Marks</button>
+    <button data-tab="export" class="tab-btn px-4 py-2 font-medium text-gray-600 hover:text-blue-600">📤 Export</button>
+  </div>
+
+  <!-- Tab Contents -->
+  <div id="studentsPanel" class="tab-panel">
+    <div class="bg-white p-4 rounded-xl shadow mb-4">
+      <h2 class="text-lg font-semibold mb-2">➕ Add Student</h2>
+      <div class="flex gap-2">
+        <input type="text" id="studentName" placeholder="Full name" class="flex-1 border rounded px-3 py-2">
+        <input type="text" id="studentId" placeholder="ID (e.g., S001)" class="w-32 border rounded px-3 py-2">
+        <button id="addStudentBtn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Add</button>
+      </div>
+    </div>
+    <div class="bg-white p-4 rounded-xl shadow">
+      <h2 class="text-lg font-semibold mb-2">📋 Student List</h2>
+      <div id="studentListContainer" class="space-y-2"></div>
+    </div>
+  </div>
+
+  <div id="qrgenPanel" class="tab-panel hidden">
+    <div class="bg-white p-4 rounded-xl shadow">
+      <h2 class="text-lg font-semibold mb-2">🖨️ Generate Student QR Cards</h2>
+      <p class="text-sm text-gray-600 mb-3">Select a student → QR code appears → Print and give to student.</p>
+      <select id="studentSelectForQR" class="w-full border rounded px-3 py-2 mb-3"></select>
+      <div class="flex justify-center">
+        <div id="qrDisplayArea" class="bg-white p-4 border rounded inline-block">
+          <p class="text-gray-400">Select a student</p>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-2 text-center">✂️ Cut out and stick on student notebook/ID card.</p>
+    </div>
+  </div>
+
+  <div id="attendancePanel" class="tab-panel hidden">
+    <div class="bg-white p-4 rounded-xl shadow">
+      <h2 class="text-lg font-semibold mb-2">📸 Scan Student QR Code</h2>
+      <div class="mb-3">
+        <button id="startScanBtn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">▶️ Start Camera</button>
+        <button id="stopScanBtn" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 ml-2 hidden">⏹️ Stop</button>
+      </div>
+      <div class="relative">
+        <video id="scannerVideo" class="scanner-video border" autoplay playsinline></video>
+        <canvas id="scannerCanvas" class="hidden"></canvas>
+      </div>
+      <div id="scanResult" class="mt-2 p-2 rounded text-center"></div>
+      <div class="mt-4">
+        <h3 class="font-medium">✅ Today's Attendance (<span id="attendanceDate"></span>)</h3>
+        <ul id="attendanceList" class="mt-2 divide-y"></ul>
+      </div>
+    </div>
+  </div>
+
+  <div id="marksPanel" class="tab-panel hidden">
+    <div class="bg-white p-4 rounded-xl shadow">
+      <h2 class="text-lg font-semibold mb-2">📊 Enter Marks / Grades</h2>
+      <div class="flex gap-2 mb-3">
+        <input type="text" id="assessmentName" placeholder="Assessment (e.g., Math Test 1)" class="flex-1 border rounded px-3 py-2">
+        <input type="date" id="assessmentDate" class="border rounded px-3 py-2">
+      </div>
+      <div id="marksEntryContainer" class="space-y-2 max-h-96 overflow-y-auto"></div>
+      <button id="saveMarksBtn" class="mt-3 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">💾 Save Marks</button>
+    </div>
+  </div>
+
+  <div id="exportPanel" class="tab-panel hidden">
+    <div class="bg-white p-4 rounded-xl shadow space-y-4">
+      <div>
+        <h3 class="font-medium">📄 Export as File</h3>
+        <div class="flex gap-2 mt-2">
+          <button id="exportJSONBtn" class="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300">⬇️ JSON</button>
+          <button id="exportCSVBtn" class="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300">⬇️ CSV (Attendance+Marks)</button>
+        </div>
+      </div>
+      <div>
+        <h3 class="font-medium">📱 Offline Transfer via QR</h3>
+        <p class="text-sm text-gray-600">Generate a QR code containing all data. Another device with this app can scan to import.</p>
+        <button id="generateDataQRBtn" class="mt-2 bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">📲 Generate Data QR</button>
+        <div id="dataQRDisplay" class="mt-3 flex justify-center"></div>
+      </div>
+      <div class="border-t pt-3">
+        <p class="text-sm text-gray-500">⚠️ Keep exported files as backup. All data stays on this device.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function(){
+    // ---------- Storage setup ----------
+    const store = localforage.createInstance({ name: 'QRClassroom' });
+
+    // ---------- State ----------
+    let students = [];
+    let attendanceRecords = {}; // key: studentId, value: array of timestamps (or just dates)
+    let marksData = {};         // key: studentId, value: array of { assessment, date, marks }
+
+    // UI elements
+    const panels = {
+      students: document.getElementById('studentsPanel'),
+      qrgen: document.getElementById('qrgenPanel'),
+      attendance: document.getElementById('attendancePanel'),
+      marks: document.getElementById('marksPanel'),
+      export: document.getElementById('exportPanel')
+    };
+    const tabBtns = document.querySelectorAll('.tab-btn');
+
+    // ---------- Helper: switch tabs ----------
+    function switchTab(tabId) {
+      Object.values(panels).forEach(p => p.classList.add('hidden'));
+      panels[tabId].classList.remove('hidden');
+      tabBtns.forEach(btn => {
+        if (btn.dataset.tab === tabId) {
+          btn.classList.add('active-tab', 'border-b-2', 'border-blue-600', 'text-blue-600');
+        } else {
+          btn.classList.remove('active-tab', 'border-b-2', 'border-blue-600', 'text-blue-600');
+        }
+      });
+      if (tabId === 'qrgen') populateStudentSelect();
+      if (tabId === 'marks') renderMarksEntry();
+    }
+
+    tabBtns.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+    // ---------- Load / Save data ----------
+    async function loadData() {
+      students = await store.getItem('students') || [];
+      attendanceRecords = await store.getItem('attendance') || {};
+      marksData = await store.getItem('marks') || {};
+      renderStudentList();
+      populateStudentSelect();
+      renderAttendanceList();
+    }
+    async function saveStudents() { await store.setItem('students', students); }
+    async function saveAttendance() { await store.setItem('attendance', attendanceRecords); }
+    async function saveMarks() { await store.setItem('marks', marksData); }
+
+    // ---------- Student Management ----------
+    function renderStudentList() {
+      const container = document.getElementById('studentListContainer');
+      if (!students.length) {
+        container.innerHTML = '<p class="text-gray-400 italic">No students added.</p>';
+        return;
+      }
+      container.innerHTML = students.map(s => `
+        <div class="flex justify-between items-center border-b py-2">
+          <div><span class="font-medium">${s.name}</span> <span class="text-sm text-gray-500">(${s.id})</span></div>
+          <button data-id="${s.id}" class="delete-student text-red-500 hover:text-red-700 text-sm">Remove</button>
+        </div>
+      `).join('');
+      document.querySelectorAll('.delete-student').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.target.dataset.id;
+          students = students.filter(s => s.id !== id);
+          await saveStudents();
+          renderStudentList();
+          populateStudentSelect();
+        });
+      });
+    }
+
+    document.getElementById('addStudentBtn').addEventListener('click', async () => {
+      const name = document.getElementById('studentName').value.trim();
+      const id = document.getElementById('studentId').value.trim();
+      if (!name || !id) { alert('Name and ID required'); return; }
+      if (students.some(s => s.id === id)) { alert('ID already exists'); return; }
+      students.push({ id, name });
+      await saveStudents();
+      document.getElementById('studentName').value = '';
+      document.getElementById('studentId').value = '';
+      renderStudentList();
+      populateStudentSelect();
+    });
+
+    // ---------- QR Generation for Students ----------
+    function populateStudentSelect() {
+      const select = document.getElementById('studentSelectForQR');
+      select.innerHTML = '<option value="">-- Select student --</option>';
+      students.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.name} (${s.id})`;
+        select.appendChild(opt);
+      });
+    }
+
+    document.getElementById('studentSelectForQR').addEventListener('change', (e) => {
+      const id = e.target.value;
+      const qrDiv = document.getElementById('qrDisplayArea');
+      if (!id) { qrDiv.innerHTML = '<p class="text-gray-400">Select a student</p>'; return; }
+      const student = students.find(s => s.id === id);
+      // Generate QR code with student ID (simple JSON)
+      QRCode.toCanvas(document.createElement('canvas'), JSON.stringify({ id: student.id, name: student.name }), { width: 200 }, (err, canvas) => {
+        if (err) { qrDiv.innerHTML = '<p class="text-red-500">Error generating QR</p>'; return; }
+        qrDiv.innerHTML = '';
+        qrDiv.appendChild(canvas);
+        const printBtn = document.createElement('button');
+        printBtn.textContent = '🖨️ Print this QR';
+        printBtn.className = 'mt-2 text-sm bg-gray-200 px-3 py-1 rounded hover:bg-gray-300 block mx-auto';
+        printBtn.onclick = () => {
+          const win = window.open('', '_blank');
+          win.document.write(`<html><head><title>QR - ${student.name}</title></head><body style="text-align:center; padding:20px">`);
+          win.document.write(`<h2>${student.name}</h2><p>ID: ${student.id}</p>`);
+          win.document.write(canvas.outerHTML);
+          win.document.write('<p>---- Cut and keep ----</p></body></html>');
+          win.document.close();
+          win.print();
+        };
+        qrDiv.appendChild(printBtn);
+      });
+    });
+
+    // ---------- Attendance Scanner ----------
+    let videoStream = null;
+    const video = document.getElementById('scannerVideo');
+    const canvas = document.getElementById('scannerCanvas');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('startScanBtn');
+    const stopBtn = document.getElementById('stopScanBtn');
+    const scanResultDiv = document.getElementById('scanResult');
+
+    function setAttendanceDate() {
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('attendanceDate').textContent = today;
+    }
+    setAttendanceDate();
+
+    async function startScanner() {
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        video.srcObject = videoStream;
+        video.play();
+        startBtn.classList.add('hidden');
+        stopBtn.classList.remove('hidden');
+        scanResultDiv.innerHTML = '<span class="text-green-600">📷 Camera active. Show QR code.</span>';
+        requestAnimationFrame(scanTick);
+      } catch (err) {
+        alert('Camera access denied or not available.');
+      }
+    }
+
+    function stopScanner() {
+      if (videoStream) {
+        videoStream.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+      }
+      startBtn.classList.remove('hidden');
+      stopBtn.classList.add('hidden');
+      scanResultDiv.innerHTML = '';
+    }
+
+    function scanTick() {
+      if (!videoStream || video.readyState !== video.HAVE_ENOUGH_DATA) {
+        if (videoStream) requestAnimationFrame(scanTick);
+        return;
+      }
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, canvas.width, canvas.height);
+      if (code) {
+        handleScannedQR(code.data);
+        stopScanner(); // stop after successful scan
+      } else {
+        requestAnimationFrame(scanTick);
+      }
+    }
+
+    async function handleScannedQR(data) {
+      try {
+        const parsed = JSON.parse(data);
+        if (!parsed.id) throw new Error('Invalid QR');
+        const student = students.find(s => s.id === parsed.id);
+        if (!student) {
+          scanResultDiv.innerHTML = `<span class="text-red-600">❌ Student ID ${parsed.id} not found.</span>`;
+          return;
+        }
+        const today = new Date().toISOString().split('T')[0];
+        if (!attendanceRecords[parsed.id]) attendanceRecords[parsed.id] = [];
+        if (!attendanceRecords[parsed.id].includes(today)) {
+          attendanceRecords[parsed.id].push(today);
+          await saveAttendance();
+          scanResultDiv.innerHTML = `<span class="text-green-700 font-bold">✅ ${student.name} marked present (${today})</span>`;
+        } else {
+          scanResultDiv.innerHTML = `<span class="text-yellow-600">⚠️ ${student.name} already marked today.</span>`;
+        }
+        renderAttendanceList();
+      } catch (e) {
+        scanResultDiv.innerHTML = `<span class="text-red-600">❌ Invalid QR code content.</span>`;
+      }
+    }
+
+    startBtn.addEventListener('click', startScanner);
+    stopBtn.addEventListener('click', stopScanner);
+
+    function renderAttendanceList() {
+      const list = document.getElementById('attendanceList');
+      const today = new Date().toISOString().split('T')[0];
+      const presentIds = Object.entries(attendanceRecords)
+        .filter(([_, dates]) => dates.includes(today))
+        .map(([id]) => id);
+      const presentStudents = students.filter(s => presentIds.includes(s.id));
+      if (presentStudents.length === 0) {
+        list.innerHTML = '<li class="py-1 text-gray-400">No students marked present today.</li>';
+        return;
+      }
+      list.innerHTML = presentStudents.map(s => `<li class="py-1 flex justify-between"><span>${s.name} (${s.id})</span><span class="text-green-600">✔️</span></li>`).join('');
+    }
+
+    // ---------- Marks Entry ----------
+    function renderMarksEntry() {
+      const container = document.getElementById('marksEntryContainer');
+      if (!students.length) {
+        container.innerHTML = '<p class="text-gray-400">Add students first.</p>';
+        return;
+      }
+      container.innerHTML = students.map(s => `
+        <div class="flex items-center gap-2 border-b py-1">
+          <span class="w-32 truncate">${s.name}</span>
+          <input type="text" id="marks_${s.id}" placeholder="Marks" class="w-20 border rounded px-2 py-1 text-sm">
+        </div>
+      `).join('');
+    }
+
+    document.getElementById('saveMarksBtn').addEventListener('click', async () => {
+      const assessment = document.getElementById('assessmentName').value.trim();
+      const date = document.getElementById('assessmentDate').value;
+      if (!assessment || !date) { alert('Enter assessment name and date'); return; }
+      students.forEach(s => {
+        const input = document.getElementById(`marks_${s.id}`);
+        const val = input.value.trim();
+        if (val === '') return;
+        if (!marksData[s.id]) marksData[s.id] = [];
+        marksData[s.id].push({ assessment, date, marks: val });
+      });
+      await saveMarks();
+      alert('Marks saved!');
+      // Clear inputs
+      document.getElementById('assessmentName').value = '';
+      document.getElementById('assessmentDate').value = '';
+      renderMarksEntry();
+    });
+
+    // ---------- Export ----------
+    function getAllData() {
+      return { students, attendanceRecords, marksData };
+    }
+
+    document.getElementById('exportJSONBtn').addEventListener('click', () => {
+      const data = getAllData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `classroom_backup_${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+    });
+
+    document.getElementById('exportCSVBtn').addEventListener('click', () => {
+      // Simple CSV: Student ID, Name, Attendance (today?), Last Assessment Marks
+      let csv = "Student ID,Name,Attendance Today,Last Marks\n";
+      const today = new Date().toISOString().split('T')[0];
+      students.forEach(s => {
+        const present = attendanceRecords[s.id]?.includes(today) ? 'Present' : 'Absent';
+        const lastMark = marksData[s.id]?.slice(-1)[0]?.marks || '';
+        csv += `"${s.id}","${s.name}","${present}","${lastMark}"\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `attendance_${today}.csv`;
+      a.click();
+    });
+
+    document.getElementById('generateDataQRBtn').addEventListener('click', async () => {
+      const data = getAllData();
+      const jsonStr = JSON.stringify(data);
+      const qrDiv = document.getElementById('dataQRDisplay');
+      // QR code max size ~3KB; if too large, compress or warn
+      if (jsonStr.length > 2000) {
+        qrDiv.innerHTML = '<p class="text-red-500">Data too large for QR. Export as file instead.</p>';
+        return;
+      }
+      QRCode.toCanvas(document.createElement('canvas'), jsonStr, { width: 250 }, (err, canvas) => {
+        if (err) { qrDiv.innerHTML = '<p class="text-red-500">Error generating QR</p>'; return; }
+        qrDiv.innerHTML = '';
+        qrDiv.appendChild(canvas);
+        qrDiv.insertAdjacentHTML('beforeend', '<p class="text-xs text-gray-500 mt-1">Scan this QR with another device to import data.</p>');
+      });
+    });
+
+    // ---------- Initialize ----------
+    loadData().then(() => {
+      switchTab('students');
+    });
+
+  })();
+</script>
+</body>
+</html>
